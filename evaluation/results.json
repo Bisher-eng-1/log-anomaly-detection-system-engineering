@@ -1,0 +1,62 @@
+{
+  "evaluation_type": "deterministic_synthetic_holdout",
+  "seed": 20261103,
+  "dataset": {
+    "training_normal_records": 320,
+    "training_anomaly_records": 320,
+    "validation_normal_records": 120,
+    "test_normal_records": 170,
+    "test_anomaly_records": 170,
+    "test_template_generated_normal_records": 160,
+    "test_template_generated_anomaly_records": 160,
+    "test_challenge_normal_records": 10,
+    "test_challenge_anomaly_records": 10,
+    "training_normal_templates": 12,
+    "heldout_normal_templates": 4,
+    "training_anomaly_templates": 13,
+    "heldout_anomaly_templates": 5
+  },
+  "random_forest_classifier_only": {
+    "true_positive": 125,
+    "true_negative": 168,
+    "false_positive": 2,
+    "false_negative": 45,
+    "precision": 0.9843,
+    "recall": 0.7353,
+    "f1_score": 0.8418,
+    "false_positive_rate": 0.0118,
+    "accuracy": 0.8618
+  },
+  "hybrid_classifier_plus_guardrails": {
+    "true_positive": 161,
+    "true_negative": 168,
+    "false_positive": 2,
+    "false_negative": 9,
+    "precision": 0.9877,
+    "recall": 0.9471,
+    "f1_score": 0.967,
+    "false_positive_rate": 0.0118,
+    "accuracy": 0.9676
+  },
+  "validation_normal_only": {
+    "records": 120,
+    "classifier_false_positives_at_probability_0_5": 2,
+    "classifier_false_positive_rate_at_probability_0_5": 0.0167
+  },
+  "hybrid_detection_sources": {
+    "operational_guardrail": 124,
+    "random_forest_classifier": 216
+  },
+  "runtime": {
+    "python": "3.13.5",
+    "numpy": "2.3.5",
+    "scipy": "1.17.0",
+    "scikit_learn": "1.8.0"
+  },
+  "limitations": [
+    "All records are synthetic and generated from fixed templates.",
+    "The held-out split prevents exact record reuse but does not represent production log diversity.",
+    "Metrics are valid only for this generated corpus and must not be generalized to real services.",
+    "The validation set is normal-only and is not used to tune the decision threshold."
+  ]
+}

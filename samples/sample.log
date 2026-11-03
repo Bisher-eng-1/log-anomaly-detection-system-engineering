@@ -1,0 +1,6 @@
+INFO: System running
+INFO: health check passed
+WARN: High CPU
+INFO: request completed with status 200
+ERROR: HTTP 500 Internal Server Error
+INFO: worker is ready
