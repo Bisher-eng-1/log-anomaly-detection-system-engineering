@@ -18,12 +18,13 @@ RUN apt-get update \
     && useradd --system --uid 10001 --gid appuser --create-home --shell /usr/sbin/nologin appuser
 
 COPY requirements.txt .
-RUN python -m pip install --upgrade pip \
-    && python -m pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --retries 10 --timeout 120 --upgrade pip \
+    && python -m pip install --no-cache-dir --retries 10 --timeout 120 -r requirements.txt
 
 COPY --chown=appuser:appuser app.py training_data.py ./
 COPY --chown=appuser:appuser samples ./samples
 COPY --chown=appuser:appuser scripts ./scripts
+COPY --chown=appuser:appuser benchmarks ./benchmarks
 
 USER 10001:10001
 

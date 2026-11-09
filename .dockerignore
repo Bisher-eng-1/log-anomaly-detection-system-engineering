@@ -6,7 +6,6 @@ __pycache__/
 .coverage
 .DS_Store
 tests/
-benchmarks/
 evaluation/
 docs/
 *.zip
