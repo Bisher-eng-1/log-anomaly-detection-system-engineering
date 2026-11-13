@@ -1,154 +1,150 @@
 # Log Anomaly Detection System
 
-A resource-constrained, streaming log-analysis prototype built with
-Python and scikit-learn. It combines a supervised Random Forest
-classifier with explicit operational guardrails, sparse text/metadata
-features, bounded input processing, Docker memory controls, and
-reproducible evaluation tooling.
+[![CI](https://github.com/Bisher-eng-1/log-anomaly-detection-system-engineering/actions/workflows/ci.yml/badge.svg)](https://github.com/Bisher-eng-1/log-anomaly-detection-system-engineering/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.13-3776AB?logo=python&logoColor=white)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-1.8.0-F7931E?logo=scikitlearn&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-240%20MiB%20Limit-2496ED?logo=docker&logoColor=white)
+![Tests](https://img.shields.io/badge/Tests-35%20unittest%20passing-brightgreen)
 
-## Engineering goals
+A resource-constrained, streaming log-analysis prototype built with Python and scikit-learn. It combines a supervised Random Forest classifier with explicit operational guardrails, sparse text/metadata features, bounded input processing, Docker memory controls, and reproducible evaluation tooling.
 
--   Process log records incrementally rather than loading an entire
-    input log into memory.
--   Classify each record using a trained machine-learning model and
-    report the model's anomaly-probability estimate.
--   Apply deterministic guardrails to selected high-confidence
-    operational failures.
--   Keep feature matrices sparse and record size bounded.
--   Run as a non-root Docker container with a configured memory ceiling
-    below 256 MiB.
--   Make tests, synthetic evaluation, throughput measurements, and
-    container-memory validation repeatable.
+---
 
-## Architecture
+## Table of Contents
 
-``` mermaid
+1. [Engineering Goals](#engineering-goals)
+2. [Architecture & Processing Stages](#architecture--processing-stages)
+3. [Machine-Learning Design](#machine-learning-design)
+4. [Operational Guardrails](#operational-guardrails)
+5. [Held-Out Synthetic Evaluation Summary](#held-out-synthetic-evaluation-summary)
+6. [Repository Structure](#repository-structure)
+7. [Quick Start & CLI Usage](#quick-start--cli-usage)
+8. [Automated Tests & Benchmarks](#automated-tests--benchmarks)
+9. [Docker Deployment & Memory Validation](#docker-deployment--memory-validation)
+10. [Known Limitations & Next Steps](#known-limitations--next-steps)
+11. [References](#references)
+
+---
+
+## Engineering Goals
+
+- Process log records incrementally rather than loading an entire input log into memory.
+- Classify each record using a trained machine-learning model and report the model's anomaly-probability estimate.
+- Apply deterministic guardrails to selected high-confidence operational failures.
+- Keep feature matrices sparse and per-record size strictly bounded.
+- Run as a non-root Docker container with a configured memory ceiling below 256 MiB (`240 MiB`).
+- Make tests, synthetic evaluation, throughput measurements, and container-memory validation repeatable.
+
+---
+
+## Architecture & Processing Stages
+
+```mermaid
 flowchart TD
-    A[stdin or log file] --> B[Bounded line reader]
-    B --> C[Record normalisation]
-    C --> D[Feature extraction]
-    D --> E[HashingVectorizer: word uni/bi-grams]
-    D --> F[DictVectorizer: operational metadata]
-    E --> G[CSR sparse feature matrix]
-    F --> G
-    G --> H[Random Forest classifier]
-    H --> I[Anomaly probability estimate]
-    C --> J[Operational guardrails]
-    I --> K{Final decision}
-    J --> K
-    K --> L[NORMAL / ANOMALY / IGNORED]
-    L --> M[stdout: score, label, detection source]
+    A[stdin or log file] --> B[Bounded line reader]
+    B --> C[Record normalisation]
+    C --> D[Feature extraction]
+    D --> E[HashingVectorizer: word uni/bi-grams]
+    D --> F[DictVectorizer: operational metadata]
+    E --> G[CSR sparse feature matrix]
+    F --> G
+    G --> H[Random Forest classifier]
+    H --> I[Anomaly probability estimate]
+    C --> J[Operational guardrails]
+    I --> K{Final decision}
+    J --> K
+    K --> L[NORMAL / ANOMALY / IGNORED]
+    L --> M[stdout: score, label, detection source]
 ```
 
-### Processing stages
+1. **Bounded input:** Standard input and file input are consumed one physical line at a time (`readline(MAX_LINE_CHARS + 2)`). Each record is capped at `16,384` characters; oversized remainders are discarded without buffering before reading the next line.
+2. **Text features:** `HashingVectorizer` produces a fixed-width `1,024`-feature vector with `(1, 2)` word n-grams, avoiding unbounded in-memory vocabulary growth.
+3. **Operational metadata:** `DictVectorizer` encodes log severity (`DEBUG`, `INFO`, `WARN`, `ERROR`, `CRITICAL`/`FATAL`, `UNKNOWN`), length buckets, contextual HTTP error flags, and keyword indicators (exceptions, timeouts, CPU, memory/OOM, disk/storage, auth failures, restarts, network faults).
+4. **Sparse representation:** Text and metadata matrices are combined into a SciPy CSR sparse matrix.
+5. **Classifier:** A `RandomForestClassifier` is fitted once at startup on labelled normal and anomaly examples.
+6. **Operational guardrails:** Explicit deterministic rules override the ML classifier for high-confidence failures (HTTP `5xx`, resource-pressure warnings, `CRITICAL`/`FATAL` prefixes, and fatal error signatures).
+7. **Output:** Each non-empty record emits a label, signed classifier margin (`0.5 - model_anomaly_score`), class-1 probability estimate, and decision source.
 
-1\. **Bounded input:** standard input and file input are consumed one
-physical line at a time. A record is limited to 16,384 characters. When
-an oversized physical line is encountered, its remainder is discarded
-before the next record is read. 2. **Text features:**
-`HashingVectorizer` creates a fixed-width representation with 1,024
-hashed word features and unigram/bigram tokens. Hashing avoids
-maintaining a growing vocabulary. 3. **Operational metadata:**
-`DictVectorizer` encodes severity and indicators for HTTP errors,
-exceptions, timeouts, CPU, memory, disk/storage, authentication
-failures, restarts, and network faults. 4. **Sparse representation:**
-text and metadata features are joined into a CSR sparse matrix using
-SciPy. 5. **Classifier:** a `RandomForestClassifier` is trained on
-labelled normal and anomaly examples. The default model is fitted once
-when the process starts. 6. **Operational guardrails:** explicit rules
-override the classifier for selected cases such as HTTP 5xx,
-resource-pressure warnings, and fatal failure signatures. 7. **Output:**
-each non-empty record produces a label, a signed classifier margin, a
-class-1 probability estimate, and the source that determined the final
-label.
+---
 
-## Machine-learning design
+## Machine-Learning Design
 
-### Feature representation
+### Feature Representation
 
-  -----------------------------------------------------------------------
-  Component               Configuration           Purpose
-  ----------------------- ----------------------- -----------------------
-  `HashingVectorizer`     1,024 features;         Fixed-size text
-                          `(1, 2)` n-grams;       representation
-                          lowercase; non-negative 
-                          hashing                 
+| Component | Configuration | Purpose |
+| :--- | :--- | :--- |
+| `HashingVectorizer` | `1,024` features; `(1, 2)` n-grams; lowercase; non-negative hashing; L2 norm | Fixed-size sparse text representation without growing vocabulary |
+| `DictVectorizer` | `sparse=True` | Encodes normalized severity, length bucket, and operational indicators |
+| Feature assembly | SciPy CSR matrix (`hstack(..., format="csr")`) | Avoids dense text-feature allocation |
 
-  `DictVectorizer`        Sparse output           Severity and
-                                                  operational indicators
+### Classifier Configuration
 
-  Feature assembly        SciPy CSR matrix        Avoids dense
-                                                  text-feature allocation
-  -----------------------------------------------------------------------
+| Parameter | Value |
+| :--- | :--- |
+| Estimators | `240` trees |
+| Maximum depth | `14` |
+| Minimum samples per leaf | `2` |
+| Feature sampling | `sqrt` |
+| Class weighting | `balanced_subsample` |
+| Parallel jobs | `1` |
+| Random state | `42` (default) |
+| Classification threshold | `0.50` class-1 probability estimate |
 
-### Classifier configuration
+`model_anomaly_score` is `predict_proba(...)[class=1]`. It is an uncalibrated model probability estimate rather than a production risk probability. `decision_value` is `0.5 - model_anomaly_score` (negative values indicate the classifier crossed the anomaly threshold). Guardrails can still raise an `ANOMALY` alert when the classifier probability is below `0.50`.
 
-  Parameter                                                Value
-  -------------------------- -----------------------------------
-  Estimators                                           240 trees
-  Maximum depth                                               14
-  Minimum samples per leaf                                     2
-  Feature sampling                                        `sqrt`
-  Class weighting                           `balanced_subsample`
-  Parallel jobs                                                1
-  Random state                                     42 by default
-  Classification threshold     0.50 class-1 probability estimate
+The bundled training corpus (`training_data.py`) is deterministic and synthetic so the prototype runs out of the box without private production logs. Before any production deployment, train and evaluate with representative, reviewed, labelled service logs.
 
-`model_anomaly_score` is `predict_proba(...)[class=1]`. It is a model
-probability estimate, not a calibrated production risk probability.
-`decision_value` is `0.5 - model_anomaly_score`; negative values
-indicate that the classifier crossed the anomaly threshold. Guardrails
-can still raise an alert when the classifier probability is below 0.50.
+### Custom Labelled Training Data
 
-The bundled training corpus is deterministic and synthetic. It includes
-ordinary baseline messages, generated normal records, and generated
-anomaly records. It makes the example executable without private
-production logs; it does not establish how the classifier will perform
-on an unseen organisation's log format. Before deployment, train and
-evaluate with representative, reviewed, labelled service logs.
+Supply one normal-only file and one anomaly-only file (each physical line is one labelled record, minimum 8 records per class):
 
-### Custom labelled training data
-
-Supply one normal-only file and one anomaly-only file. Each physical
-line is one labelled record:
-
-``` bash
-python app.py \\
-  --normal-training data/normal.log \\
-  --anomaly-training data/anomalies.log \\
-  --input samples/sample.log
+```bash
+python app.py \
+  --normal-training data/normal.log \
+  --anomaly-training data/anomalies.log \
+  --input samples/sample.log
 ```
 
-Both training arguments are required together. The files are read at
-startup; they are not retained by the application. Do not use unreviewed
-or sensitive production logs in a public repository.
+Both `--normal-training` and `--anomaly-training` must be supplied together. Do not commit unreviewed or sensitive production logs to a public repository.
 
-## Operational guardrails
+---
 
-The deterministic layer currently covers:
+## Operational Guardrails
 
--   HTTP status codes from 500 through 599, but only when the code
-    appears in an explicit HTTP/status context such as `HTTP 503`,
-    `status_code=503`, or `response status: 503`.
--   `WARN` records containing selected resource-pressure phrases,
-    including high CPU, high memory, memory exhausted, disk full, and
-    resource exhausted.
--   `CRITICAL` and `FATAL` severity records.
--   High-confidence failure phrases such as kernel panic, segmentation
-    fault, out-of-memory, OOM, database corruption, disk full,
-    connection refused, and unrecoverable failures, even when the log's
-    severity prefix is inconsistent.
--   Additional selected `ERROR` signatures such as exception, traceback,
-    and authentication failure.
+The deterministic guardrail layer currently catches:
 
-A bare number such as `503` in a user ID or `512` in a record count is
-not treated as an HTTP status. The guardrail list is intentionally
-explicit and should be adapted to the target service's log conventions.
+- **Explicit HTTP 5xx responses** (`500`–`599`) only when paired with explicit status context (`HTTP 503`, `status_code=500`, `response status: 502`). Bare numbers such as `user id 503` or `processed 512 records` are ignored.
+- **`WARN` resource-pressure logs** containing phrases such as `high cpu`, `high memory`, `memory exhausted`, `disk full`, or `resource exhausted`.
+- **`CRITICAL` and `FATAL` severity records.**
+- **High-confidence failure phrases** even when prefixed as `INFO` (`kernel panic`, `segmentation fault`, `out of memory`, `oom`, `database corruption`, `disk full`, `connection refused`, `unrecoverable`).
+- **Selected `ERROR` signatures** such as `exception`, `traceback`, and `authentication failed`.
 
-## Repository structure
+---
 
-``` text
-log-anomaly-detection-system/
+## Held-Out Synthetic Evaluation Summary
+
+Evaluated via `python -m evaluation.evaluate_model --output evaluation/results.json` using template-disjoint training (`320` normal + `320` anomaly) and held-out test (`170` normal + `170` anomaly, including 10 challenge examples per class):
+
+| Metric | Random Forest Only | Classifier + Guardrails |
+| :--- | :---: | :---: |
+| True Positives | `125` | `161` |
+| True Negatives | `168` | `168` |
+| False Positives | `2` | `2` |
+| False Negatives | `45` | `9` |
+| Precision | `98.43%` | `98.77%` |
+| Recall | `73.53%` | `94.71%` |
+| F1-Score | `84.18%` | `96.70%` |
+| False-Positive Rate | `1.18%` | `1.18%` |
+| Accuracy | `86.18%` | `96.76%` |
+
+> **Scope note:** These metrics describe only the deterministic synthetic held-out corpus checked into `evaluation/results.json`. They do not represent expected real-world production accuracy. See [`TEST_RESULTS.md`](./TEST_RESULTS.md) for the full breakdown and interpretation.
+
+---
+
+## Repository Structure
+
+```text
+log-anomaly-detection-system-engineering/
 ├── app.py
 ├── training_data.py
 ├── requirements.txt
@@ -159,38 +155,40 @@ log-anomaly-detection-system/
 ├── README.md
 ├── TEST_RESULTS.md
 ├── docs/
-│   ├── TECHNICAL_WALKTHROUGH.md
-│   └── VALIDATION_CHECKLIST.md
+│   ├── TECHNICAL_WALKTHROUGH.md
+│   └── VALIDATION_CHECKLIST.md
 ├── .github/
-│   └── workflows/
-│       └── ci.yml
+│   └── workflows/
+│       └── ci.yml
 ├── samples/
-│   └── sample.log
+│   └── sample.log
 ├── evaluation/
-│   ├── __init__.py
-│   ├── dataset.py
-│   ├── evaluate_model.py
-│   └── results.json
+│   ├── __init__.py
+│   ├── dataset.py
+│   ├── evaluate_model.py
+│   └── results.json
 ├── tests/
-│   ├── __init__.py
-│   ├── test_app.py
-│   ├── test_docker_validation.py
-│   └── test_evaluation.py
+│   ├── __init__.py
+│   ├── test_app.py
+│   ├── test_docker_validation.py
+│   └── test_evaluation.py
 ├── scripts/
-│   ├── __init__.py
-│   ├── container_memory_probe.py
-│   └── validate_docker.py
+│   ├── __init__.py
+│   ├── container_memory_probe.py
+│   └── validate_docker.py
 └── benchmarks/
-    └── benchmark.py
+    └── benchmark.py
 ```
 
-## Local setup
+---
 
--   Python 3.11 or later
--   Dependencies pinned in `requirements.txt`
--   Docker Engine for image build and cgroup memory validation
+## Quick Start & CLI Usage
 
-``` bash
+### Local Setup
+
+Requires Python 3.11 or later (`numpy==2.3.5`, `scipy==1.17.0`, `scikit-learn==1.8.0`):
+
+```bash
 python -m venv .venv
 
 # Linux / macOS
@@ -203,195 +201,119 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-## Run the application
+### Run the Application
 
-Built-in demonstration:
-
-``` bash
+```bash
+# Built-in 6-record demonstration stream
 python app.py --demo
-```
 
-Process the bundled sample file:
-
-``` bash
+# Process the bundled sample log file
 python app.py --input samples/sample.log
-```
 
-Read a live stream from standard input:
-
-``` bash
+# Stream live records from stdin (Ctrl+D on Linux/macOS, Ctrl+Z + Enter on Windows)
 python app.py
 ```
 
-Provide one record per line. End input with `Ctrl+D` on Linux/macOS or
-`Ctrl+Z` followed by Enter on Windows.
+### Demo Stream Classification
 
-## Automated tests
+Running `python app.py --demo` classifies the six built-in demonstration records as follows (each line printed with `decision`, `model_anomaly_score`, and `source`):
 
-Run from the repository root:
+| Input Record | Final Label | Decision Source |
+| :--- | :---: | :--- |
+| `INFO: System running` | `NORMAL` | `random_forest_classifier` |
+| `INFO: health check passed` | `NORMAL` | `random_forest_classifier` |
+| `WARN: High CPU` | `ANOMALY` | `operational_guardrail` |
+| `INFO: request completed with HTTP 200` | `NORMAL` | `random_forest_classifier` |
+| `ERROR: HTTP 500 Internal Server Error` | `ANOMALY` | `operational_guardrail` |
+| `INFO: worker is ready` | `NORMAL` | `random_forest_classifier` |
 
-``` bash
+---
+
+## Automated Tests & Benchmarks
+
+### Run the Unit Test Suite (`35` tests)
+
+```bash
 python -m unittest -v
 ```
 
-The suite covers severity parsing, contextual HTTP status extraction,
-metadata features, training-data validation, classifier probability
-semantics, classifier-only anomaly detection, guardrail precedence,
-numeric false-positive cases, bounded input, incremental stream
-processing, CLI behaviour, evaluation metrics, deterministic dataset
-splitting, and Docker memory-size parsing.
+Covers severity parsing, contextual HTTP status extraction, metadata features, training-data size validation, probability/margin consistency, guardrail precedence, numeric false-positive immunity, `MAX_LINE_CHARS` line truncation, streaming CLI behavior, evaluation metrics, template-disjoint splits, and Docker memory-size parsing.
 
-## Model evaluation
+### Run Offline Model Evaluation
 
-Run the reproducible offline evaluation:
-
-``` bash
+```bash
 python -m evaluation.evaluate_model --output evaluation/results.json
 ```
 
-The evaluator trains on one group of message templates and evaluates on
-held-out templates, with additional challenge records that contain
-benign keyword/numeric mentions and anomalies without obvious severity
-prefixes. It reports the classifier-only and hybrid confusion matrices,
-precision, recall, F1, false-positive rate, and accuracy.
+### Run Throughput & Process-Memory Microbenchmark
 
-**Important:** this is a deterministic synthetic benchmark, not a
-production dataset. Its metrics describe only the included generated
-workload. They must not be represented as expected real-world accuracy.
-A credible deployment evaluation requires a separately labelled dataset
-collected from the target services, with time-aware or service-aware
-splits to avoid leakage.
-
-The checked-in `evaluation/results.json` is generated by the command
-above and records the seed, split sizes, environment versions, and
-limitations.
-
-## Throughput and process-memory benchmark
-
-``` bash
+```bash
 python benchmarks/benchmark.py --records 1000
 ```
 
-The benchmark reports the elapsed inference time, records per second,
-classification counts, process peak RSS, and dependency versions. It
-repeatedly processes the six-record built-in demonstration stream. This
-is a microbenchmark of the current host and workload, not a production
-capacity claim. Process RSS is not the same measurement as Docker cgroup
-memory.
+Reports elapsed inference time, throughput (records/sec), classification counts, process peak RSS, and dependency versions across repeated iterations of `DEMO_LOGS`.
 
-## Docker deployment and resource limit
+---
 
-The image uses Python 3.11 slim, runs as a non-root user, and installs
-pinned binary Python dependencies. The container configuration applies a
-**240 MiB memory limit** and an equal memory-plus-swap ceiling. The
-tested workloads completed successfully under this limit without an
-out-of-memory termination.
+## Docker Deployment & Memory Validation
 
-  Measurement                                                      Result
-  ---------------------------------------------- ------------------------
-  Configured Docker memory limit                                  240 MiB
-  Process peak RSS --- memory probe                            123.65 MiB
-  Process peak RSS --- 10,000-record benchmark                 122.34 MiB
-  Memory-probe execution                           Completed successfully
-  Docker benchmark                                 Completed successfully
+The container image runs as a non-root user on `python:3.11-slim` with a configured **240 MiB memory limit** and equal memory-plus-swap ceiling.
 
-The memory probe exercised model training followed by 500 inference
-records. A separate benchmark processed 10,000 records inside the
-constrained container. These results demonstrate successful execution of
-the tested workloads under the configured 240 MiB ceiling; they are not
-a guarantee for arbitrary workloads or deployment environments.
+| Measurement | Result |
+| :--- | :--- |
+| Configured Docker memory limit | `240 MiB` (`251,658,240 bytes`) |
+| Process peak RSS — memory probe (fit + 500 records) | `123.65 MiB` |
+| Process peak RSS — 10,000-record benchmark | `122.34 MiB` |
+| Memory-probe execution | Completed successfully |
+| Docker benchmark execution | Completed successfully |
 
-**Measurement note:** Process RSS and cgroup memory counters reported
-different values during validation. They are distinct measurement
-sources and should not be treated as interchangeable. The process RSS
-measurements are reported separately rather than being presented as
-container-wide cgroup peak usage.
+> **Measurement note:** Process RSS and cgroup memory counters are distinct measurement sources and are reported separately in [`TEST_RESULTS.md`](./TEST_RESULTS.md).
 
-Build and run:
+### Build & Run Containers
 
-``` bash
+```bash
+# Build and run with strict 240 MiB memory limit
 docker build -t log-anomaly-detection-system .
-docker run --rm \\
-  --memory=240m --memory-swap=240m \\
-  log-anomaly-detection-system
-```
+docker run --rm --memory=240m --memory-swap=240m log-anomaly-detection-system
 
-Or use Compose:
-
-``` bash
+# Or run via Docker Compose
 docker compose build
 docker compose up --abort-on-container-exit
+
+# Run against a mounted sample file
+docker run --rm \
+  --memory=240m --memory-swap=240m \
+  -v "$PWD/samples:/data:ro" \
+  log-anomaly-detection-system \
+  python app.py --input /data/sample.log
 ```
 
-Run against a mounted sample:
+### Host Container-Memory Validation
 
-``` bash
-docker run --rm \\
-  --memory=240m --memory-swap=240m \\
-  -v "$PWD/samples\:/data:ro" \\
-  log-anomaly-detection-system \\
-  python app.py --input /data/sample.log
-```
-
-### Actual container-memory validation
-
-Run this on a host with a working Docker daemon:
-
-``` bash
+```bash
 python scripts/validate_docker.py
 ```
 
-The validation script builds the image, runs the demo under the
-configured ceiling, starts a separate probe that trains the model and
-performs inference, samples `docker stats`, reads the cgroup v2/v1 peak
-counter when available, and checks the configured memory limit and
-OOM-kill state. It writes `docker-validation-results.json` with the
-measurements from that machine.
+Builds the image, exercises the probe under the 240 MiB limit, samples `docker stats`, inspects cgroup v2/v1 counters when available, checks OOM-kill status, and writes `docker-validation-results.json`. Requires observed telemetry to report `PASS`.
 
-The script requires an observed memory value to report `PASS`. If the
-runtime does not expose a usable cgroup peak and Docker stats cannot be
-sampled, it reports an incomplete/failed validation rather than
-inventing a number. Container memory is host-, runtime-, and
-workload-specific.
+---
 
-## Known limitations and next engineering steps
+## Known Limitations & Next Steps
 
--   The bundled training and evaluation data are synthetic; real-world
-    model quality is not established.
--   The classifier learns the patterns represented in its labelled
-    training data. Unseen services, formats, languages, and failure
-    modes can reduce recall or increase false positives.
--   The class-1 score is not calibrated. Probability calibration and
-    threshold selection should be performed against a representative
-    validation set and the operational cost of false
-    positives/negatives.
--   Guardrails cover only explicitly implemented signatures; they are
-    not a complete incident-detection rule set.
--   Records are evaluated independently. The system does not correlate
-    events over time or across services.
--   Feature hashing can produce collisions and does not preserve an
-    interpretable vocabulary.
--   Training happens at process startup. The prototype does not persist
-    a fitted model artifact or perform online learning.
--   Output is written to stdout. Alert routing, durable storage,
-    dashboards, authentication, and message-broker integration are
-    outside this prototype.
--   A memory ceiling does not impose a CPU quota. CPU limits and
-    production resource policies require separate load testing.
+- **Synthetic data only:** Default training and evaluation corpora are synthetic; real-world model performance depends on labelled target-service telemetry.
+- **Uncalibrated scores:** `model_anomaly_score` is not probability-calibrated; threshold tuning should reflect operational false-positive vs. false-negative costs.
+- **Stateless per-line inference:** Records are evaluated independently without temporal correlation, multi-line stack-trace grouping, or cross-service tracing.
+- **Hash collisions & startup training:** `HashingVectorizer` can experience feature collisions, and the default model trains at startup without artifact persistence or online updates.
+- **Stdout output & CPU limits:** Output is written directly to stdout without external alerting/storage sinks; production deployments require separate CPU quota and load testing.
+
+---
 
 ## References
 
-1\. scikit-learn, [RandomForestClassifier
-API](%5Bhttps://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html%5D(https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html)).
-2. scikit-learn, [HashingVectorizer
-API](%5Bhttps://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.HashingVectorizer.html%5D(https://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.HashingVectorizer.html)).
-3. scikit-learn, [DictVectorizer
-API](%5Bhttps://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.DictVectorizer.html%5D(https://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.DictVectorizer.html)).
-4. SciPy, [Sparse matrices
-documentation](%5Bhttps://docs.scipy.org/doc/scipy/reference/sparse.html%5D(https://docs.scipy.org/doc/scipy/reference/sparse.html)).
-5. Docker, [Resource
-constraints](%5Bhttps://docs.docker.com/engine/containers/resource_constraints/%5D(https://docs.docker.com/engine/containers/resource_constraints/)).
-6. Docker, [Dockerfile
-reference](%5Bhttps://docs.docker.com/reference/dockerfile/%5D(https://docs.docker.com/reference/dockerfile/)).
-7. Python, [unittest
-documentation](%5Bhttps://docs.python.org/3/library/unittest.html%5D(https://docs.python.org/3/library/unittest.html)).
+1. scikit-learn — [`RandomForestClassifier` API](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html)
+2. scikit-learn — [`HashingVectorizer` API](https://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.HashingVectorizer.html)
+3. scikit-learn — [`DictVectorizer` API](https://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.DictVectorizer.html)
+4. SciPy — [Sparse matrices documentation](https://docs.scipy.org/doc/scipy/reference/sparse.html)
+5. Docker — [Container resource constraints](https://docs.docker.com/engine/containers/resource_constraints/)
+6. Docker — [Dockerfile reference](https://docs.docker.com/reference/dockerfile/)
+7. Python — [`unittest` documentation](https://docs.python.org/3/library/unittest.html)
