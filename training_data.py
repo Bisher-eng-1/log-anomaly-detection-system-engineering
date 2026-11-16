@@ -102,7 +102,6 @@ def _render(template: str, rng: random.Random, index: int) -> str:
 
 def build_training_data(seed: int = 20261103, normal_count: int = 320,
                          anomaly_count: int = 320) -> tuple[list[str], list[int]]:
-    """Create deterministic labelled synthetic records for classifier training."""
     rng = random.Random(seed)
     records: list[str] = []
     labels: list[int] = []
@@ -121,7 +120,6 @@ def build_training_data(seed: int = 20261103, normal_count: int = 320,
 
 
 def build_default_anomaly_examples(count: int = 320, seed: int = 20261103) -> list[str]:
-    """Create the fallback anomaly class used with a caller-supplied normal set."""
     rng = random.Random(seed + 17)
     return [
         _render(rng.choice(ANOMALY_TEMPLATES), rng, 2_000_000 + index)

@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""Build, run, and measure the log detector under a Docker memory limit.
-
-Run from the repository root with:
-    python scripts/validate_docker.py
-
-The script writes docker-validation-results.json with measurements from the
-current host. It never substitutes estimated values for observed measurements.
-"""
 from __future__ import annotations
 
 import json

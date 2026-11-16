@@ -1,24 +1,26 @@
-"""Template-disjoint deterministic train/validation/test split.
-
-Training and test sets use different message templates to reduce direct template
-memorisation. The corpus remains synthetic and is not production telemetry.
-"""
 from __future__ import annotations
 
 import random
-from training_data import NORMAL_TEMPLATES, ANOMALY_TEMPLATES, _render
+
+from training_data import ANOMALY_TEMPLATES, NORMAL_TEMPLATES, _render
 
 
-def build_corpus(seed: int = 20261103, train_size: int = 320,
-                 validation_size: int = 120, test_normal_size: int = 160,
-                 test_anomaly_size: int = 160):
+def build_corpus(
+    seed: int = 20261103,
+    train_size: int = 320,
+    validation_size: int = 120,
+    test_normal_size: int = 160,
+    test_anomaly_size: int = 160,
+):
     rng = random.Random(seed)
     normal_templates = list(NORMAL_TEMPLATES)
     anomaly_templates = list(ANOMALY_TEMPLATES)
     rng.shuffle(normal_templates)
     rng.shuffle(anomaly_templates)
+
     normal_cut = max(1, int(len(normal_templates) * 0.75))
     anomaly_cut = max(1, int(len(anomaly_templates) * 0.75))
+
     train_normal_templates = normal_templates[:normal_cut]
     heldout_normal_templates = normal_templates[normal_cut:]
     train_anomaly_templates = anomaly_templates[:anomaly_cut]
@@ -32,9 +34,9 @@ def build_corpus(seed: int = 20261103, train_size: int = 320,
     validation = make(heldout_normal_templates, validation_size, 2_000_000)
     test_normal = make(heldout_normal_templates, test_normal_size, 3_000_000)
     test_anomaly = make(heldout_anomaly_templates, test_anomaly_size, 4_000_000)
+
     test = [(line, 0) for line in test_normal] + [(line, 1) for line in test_anomaly]
-    # Challenge cases deliberately remove obvious severity prefixes and include
-    # benign keyword/numeric mentions to probe semantic and contextual errors.
+
     hard_normal = [
         "INFO: exception counter sampled; no active exception",
         "INFO: CPU utilisation is 35 percent",
@@ -59,9 +61,11 @@ def build_corpus(seed: int = 20261103, train_size: int = 320,
         "INFO: CPU throttling time exceeded 85 percent",
         "INFO: memory pressure caused sustained swap activity",
     ]
+
     test.extend((line, 0) for line in hard_normal)
     test.extend((line, 1) for line in hard_anomaly)
     rng.shuffle(test)
+
     return train_normal, train_anomaly, validation, test, {
         "training_normal_templates": len(train_normal_templates),
         "heldout_normal_templates": len(heldout_normal_templates),

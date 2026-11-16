@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Exercise the detector and report the container's cgroup memory high-water mark."""
 from __future__ import annotations
 
 import json
@@ -11,7 +10,6 @@ from app import DEMO_LOGS, LogAnomalyDetector
 
 
 def read_cgroup_peak() -> tuple[int | None, str | None]:
-    """Read the cgroup v2/v1 peak counter when the runtime exposes it."""
     candidates = (
         (Path("/sys/fs/cgroup/memory.peak"), "cgroup_v2"),
         (Path("/sys/fs/cgroup/memory/memory.max_usage_in_bytes"), "cgroup_v1"),
@@ -28,18 +26,15 @@ def read_cgroup_peak() -> tuple[int | None, str | None]:
 
 def main() -> int:
     detector = LogAnomalyDetector().fit()
-    # Exercise both feature extraction and model scoring under the container cap.
-    for index in range(500):
-        detector.detect(DEMO_LOGS[index % len(DEMO_LOGS)])
+    batch = [DEMO_LOGS[i % len(DEMO_LOGS)] for i in range(64)]
+    for _ in range(8):
+        detector.detect_batch(batch)
 
-    # Keep the process alive briefly so the host-side docker-stats sampler can
-    # collect several observations after model initialisation.
     time.sleep(5)
-
     cgroup_peak_bytes, cgroup_source = read_cgroup_peak()
     process_peak_kib = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
     report = {
-        "probe": "detector_fit_and_500_inference_records",
+        "probe": "detector_fit_and_512_inference_records",
         "cgroup_peak_bytes": cgroup_peak_bytes,
         "cgroup_peak_mib": round(cgroup_peak_bytes / (1024 * 1024), 2)
         if cgroup_peak_bytes is not None

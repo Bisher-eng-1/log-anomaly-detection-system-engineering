@@ -1,18 +1,9 @@
 #!/usr/bin/env python3
-"""Evaluate the Random Forest classifier and hybrid guardrails on a held-out synthetic set.
-
-Run from repository root:
-    python -m evaluation.evaluate_model --output evaluation/results.json
-
-The report is reproducible for a fixed seed and explicitly identifies the
-synthetic corpus. It is not a substitute for labelled service telemetry.
-"""
 from __future__ import annotations
 
 import argparse
 import json
 import platform
-import sys
 from collections import Counter
 from pathlib import Path
 
@@ -20,11 +11,10 @@ import numpy
 import scipy
 import sklearn
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+from app import LogAnomalyDetector
+from evaluation.dataset import build_corpus
 
-from app import LogAnomalyDetector  # noqa: E402
-from evaluation.dataset import build_corpus  # noqa: E402
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def metrics(y_true: list[int], y_pred: list[int]) -> dict[str, float | int]:
@@ -36,8 +26,10 @@ def metrics(y_true: list[int], y_pred: list[int]) -> dict[str, float | int]:
     recall = tp / (tp + fn) if tp + fn else 0.0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
     return {
-        "true_positive": int(tp), "true_negative": int(tn),
-        "false_positive": int(fp), "false_negative": int(fn),
+        "true_positive": int(tp),
+        "true_negative": int(tn),
+        "false_positive": int(fp),
+        "false_negative": int(fn),
         "precision": round(precision, 4),
         "recall": round(recall, 4),
         "f1_score": round(f1, 4),
@@ -47,31 +39,27 @@ def metrics(y_true: list[int], y_pred: list[int]) -> dict[str, float | int]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=20261103)
     parser.add_argument("--output", type=Path, default=ROOT / "evaluation" / "results.json")
     args = parser.parse_args()
 
     train_normal, train_anomaly, validation, test, split = build_corpus(seed=args.seed)
-    detector = LogAnomalyDetector().fit(train_normal, train_anomaly)
+    ml_only = LogAnomalyDetector(use_guardrails=False).fit(train_normal, train_anomaly)
+    hybrid = LogAnomalyDetector(use_guardrails=True).fit(train_normal, train_anomaly)
 
-    # Validation set contains only normal records. This reports the empirical
-    # model-only false-positive rate without tuning on the held-out test set.
-    validation_scores = [detector.model.predict_proba(detector._features([line]))[0][1]
-                         for line in validation]
-    validation_fp = sum(score >= 0.5 for score in validation_scores)
+    val_results = ml_only.detect_batch(validation)
+    validation_fp = sum(res.label == "ANOMALY" for res in val_results)
 
+    test_lines = [line for line, _ in test]
     y_true = [label for _, label in test]
-    model_predictions: list[int] = []
-    hybrid_predictions: list[int] = []
-    source_counts: Counter[str] = Counter()
-    for line, _ in test:
-        matrix = detector._features([line])
-        model_probability = float(detector.model.predict_proba(matrix)[0][1])
-        model_predictions.append(int(model_probability >= 0.5))
-        result = detector.detect(line)
-        hybrid_predictions.append(int(result.label == "ANOMALY"))
-        source_counts[result.source] += 1
+
+    ml_results = ml_only.detect_batch(test_lines)
+    hybrid_results = hybrid.detect_batch(test_lines)
+
+    model_predictions = [int(res.label == "ANOMALY") for res in ml_results]
+    hybrid_predictions = [int(res.label == "ANOMALY") for res in hybrid_results]
+    source_counts = Counter(res.source for res in hybrid_results)
 
     report = {
         "evaluation_type": "deterministic_synthetic_holdout",
@@ -102,18 +90,11 @@ def main() -> int:
             "scipy": scipy.__version__,
             "scikit_learn": sklearn.__version__,
         },
-        "limitations": [
-            "All records are synthetic and generated from fixed templates.",
-            "The held-out split prevents exact record reuse but does not represent production log diversity.",
-            "Metrics are valid only for this generated corpus and must not be generalized to real services.",
-            "The validation set is normal-only and is not used to tune the decision threshold.",
-        ],
     }
+
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
-    report_path = args.output.relative_to(ROOT) if args.output.is_relative_to(ROOT) else args.output
-    print(f"\nReport written to: {report_path}")
     return 0
 
 
