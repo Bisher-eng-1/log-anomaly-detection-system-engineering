@@ -140,6 +140,19 @@ class DetectorTests(unittest.TestCase):
         self.assertGreaterEqual(len(DEMO_LOGS), 5)
 
 
+
+    def test_detect_batch_matches_single_record_detection(self):
+        batch = ["INFO: health check passed", "   ", "WARN: High CPU", "INFO: worker is ready"]
+        batched = self.detector.detect_batch(batch)
+        singles = [self.detector.detect(line) for line in batch]
+        self.assertEqual(batched, singles)
+
+    def test_ml_only_mode_bypasses_guardrails(self):
+        ml_only = LogAnomalyDetector(use_guardrails=False).fit()
+        result = ml_only.detect("WARN: High CPU")
+        self.assertNotEqual(result.source, "operational_guardrail")
+
+
 class StreamAndCliTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -216,6 +229,20 @@ class StreamAndCliTests(unittest.TestCase):
                 code = main(["--input", str(path)])
             self.assertEqual(code, 0)
             self.assertIn("HTTP 503", output.getvalue())
+
+
+
+    def test_json_output_and_ml_only_cli_flags(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = main(["--demo", "--mode", "ml-only", "--format", "json", "--batch-size", "2"])
+        self.assertEqual(code, 0)
+        lines = [line for line in output.getvalue().splitlines() if line.strip()]
+        self.assertEqual(len(lines), len(DEMO_LOGS))
+        import json as _json
+        for raw in lines:
+            row = _json.loads(raw)
+            self.assertNotEqual(row["source"], "operational_guardrail")
 
 
 if __name__ == "__main__":
