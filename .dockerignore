@@ -7,6 +7,5 @@ __pycache__/
 .DS_Store
 tests/
 evaluation/
-docs/
 *.zip
 docker-validation-results.json

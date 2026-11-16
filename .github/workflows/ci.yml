@@ -11,25 +11,20 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.13"]
+
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Install dependencies
-        run: |
+      - run: |
           python -m pip install -r requirements.txt
           python -m pip install coverage
-      - name: Run unit tests with coverage
-        run: |
+      - run: |
           python -m coverage run --source=app,training_data,evaluation,scripts -m unittest -v
           python -m coverage report -m
-      - name: Run CLI demonstration smoke test
-        run: python app.py --demo
-      - name: Run offline model evaluation
-        run: python -m evaluation.evaluate_model --output evaluation/results.json
-      - name: Compile Python sources
-        run: python -m compileall -q app.py training_data.py evaluation tests scripts benchmarks
+      - run: python app.py --demo
+      - run: python app.py --demo --mode ml-only --format json
+      - run: python -m evaluation.evaluate_model --output evaluation/results.json
+      - run: python -m compileall -q app.py training_data.py evaluation tests scripts benchmarks
