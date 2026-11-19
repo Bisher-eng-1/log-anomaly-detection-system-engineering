@@ -3,8 +3,13 @@ from __future__ import annotations
 
 import json
 import resource
+import sys
 import time
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from app import DEMO_LOGS, LogAnomalyDetector
 
@@ -29,7 +34,6 @@ def main() -> int:
     batch = [DEMO_LOGS[i % len(DEMO_LOGS)] for i in range(64)]
     for _ in range(8):
         detector.detect_batch(batch)
-
     time.sleep(5)
     cgroup_peak_bytes, cgroup_source = read_cgroup_peak()
     process_peak_kib = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
